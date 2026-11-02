@@ -38,6 +38,51 @@
       100% { background-position: 0% 50%; }
     }
 
+    /* ============ MUSIC TOGGLE BUTTON ============ */
+    .music-toggle {
+      position: fixed;
+      top: 12px;
+      right: 12px;
+      z-index: 800;
+      width: 46px;
+      height: 46px;
+      border-radius: 50%;
+      border: 3px solid #fefae0;
+      background: linear-gradient(145deg, #f9c74f, #d4a373);
+      color: #7f5539;
+      font-size: 1.2rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 5px 0 #7f5539, 0 6px 15px rgba(0,0,0,0.3);
+      transition: all 0.15s ease;
+      animation: musicPulse 2s ease-in-out infinite;
+    }
+    .music-toggle:active {
+      transform: translateY(4px);
+      box-shadow: 0 1px 0 #7f5539, 0 4px 10px rgba(0,0,0,0.2);
+    }
+    .music-toggle.muted {
+      background: linear-gradient(145deg, #c9c9c9, #9a9a9a);
+      color: #4b3a2b;
+      animation: none;
+    }
+    @keyframes musicPulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.08); }
+    }
+    .music-toggle i {
+      animation: noteBounce 1s ease-in-out infinite;
+    }
+    .music-toggle.muted i {
+      animation: none;
+    }
+    @keyframes noteBounce {
+      0%, 100% { transform: translateY(0) rotate(-5deg); }
+      50% { transform: translateY(-3px) rotate(5deg); }
+    }
+
     /* ============ BOTTOM CREDIT BAR ============ */
     .credit-bar {
       position: fixed;
@@ -696,6 +741,7 @@
       .cake-scene { padding: 10px 10px 60px; }
       .cake-stage { width: min(82vw, 290px); height: min(82vw, 290px); }
       .credit-bar { font-size: 0.78rem; padding: 8px; }
+      .music-toggle { width: 40px; height: 40px; font-size: 1rem; top: 8px; right: 8px; }
     }
 
     /* landscape mobile: compact */
@@ -719,6 +765,14 @@
   </style>
 </head>
 <body>
+
+  <!-- Background Music (Happy Birthday melody generated via Web Audio API) -->
+  <!-- The music is synthesized in JS below so no external file is needed -->
+
+  <!-- Music Toggle Button -->
+  <button class="music-toggle" id="musicToggle" title="Toggle birthday music" aria-label="Toggle birthday music">
+    <i class="fas fa-music" id="musicIcon"></i>
+  </button>
 
   <!-- Confetti Layer -->
   <div class="confetti-layer" id="confettiLayer"></div>
@@ -840,6 +894,186 @@
       "use strict";
 
       /* ==========================================================
+         0. HAPPY BIRTHDAY SONG (Web Audio API — synthesized melody)
+         No external file needed, plays automatically after first tap.
+      ========================================================== */
+      let audioCtx = null;
+      let musicPlaying = false;
+      let musicLoopTimer = null;
+      let masterGain = null;
+
+      // Happy Birthday melody in note names + durations (beats)
+      // Using a cheerful major key. Note frequencies: C4=261.63, etc.
+      const melody = [
+        // "Happy birthday to you"
+        { note: 'G4', beats: 0.75 },
+        { note: 'G4', beats: 0.25 },
+        { note: 'A4', beats: 1 },
+        { note: 'G4', beats: 1 },
+        { note: 'C5', beats: 1 },
+        { note: 'B4', beats: 2 },
+        // "Happy birthday to you"
+        { note: 'G4', beats: 0.75 },
+        { note: 'G4', beats: 0.25 },
+        { note: 'A4', beats: 1 },
+        { note: 'G4', beats: 1 },
+        { note: 'D5', beats: 1 },
+        { note: 'C5', beats: 2 },
+        // "Happy birthday dear Nahid"
+        { note: 'G4', beats: 0.75 },
+        { note: 'G4', beats: 0.25 },
+        { note: 'G5', beats: 1 },
+        { note: 'E5', beats: 1 },
+        { note: 'C5', beats: 1 },
+        { note: 'B4', beats: 1 },
+        { note: 'A4', beats: 2 },
+        // "Happy birthday to you"
+        { note: 'F5', beats: 0.75 },
+        { note: 'F5', beats: 0.25 },
+        { note: 'E5', beats: 1 },
+        { note: 'C5', beats: 1 },
+        { note: 'D5', beats: 1 },
+        { note: 'C5', beats: 2.5 },
+        // little rest at end
+        { note: 'REST', beats: 1 }
+      ];
+
+      const noteFreq = {
+        'C4': 261.63, 'D4': 293.66, 'E4': 329.63, 'F4': 349.23,
+        'G4': 392.00, 'A4': 440.00, 'B4': 493.88,
+        'C5': 523.25, 'D5': 587.33, 'E5': 659.25, 'F5': 698.46,
+        'G5': 783.99, 'A5': 880.00, 'B5': 987.77,
+        'C6': 1046.50
+      };
+
+      const BPM = 140; // cheerful tempo
+      const beatDuration = 60 / BPM;
+
+      function initAudio() {
+        if (!audioCtx) {
+          const AC = window.AudioContext || window.webkitAudioContext;
+          if (!AC) return false;
+          audioCtx = new AC();
+          masterGain = audioCtx.createGain();
+          masterGain.gain.value = 0.18; // gentle background volume
+          masterGain.connect(audioCtx.destination);
+        }
+        if (audioCtx.state === 'suspended') {
+          audioCtx.resume();
+        }
+        return true;
+      }
+
+      function playNote(freq, startTime, duration, type) {
+        if (!audioCtx || !masterGain) return;
+        const osc = audioCtx.createOscillator();
+        const env = audioCtx.createGain();
+        osc.type = type || 'triangle';
+        osc.frequency.value = freq;
+
+        // gentle envelope to avoid clicks
+        const attack = 0.02;
+        const release = 0.12;
+        env.gain.setValueAtTime(0.0001, startTime);
+        env.gain.exponentialRampToValueAtTime(0.9, startTime + attack);
+        env.gain.setValueAtTime(0.9, startTime + duration - release);
+        env.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
+
+        osc.connect(env);
+        env.connect(masterGain);
+        osc.start(startTime);
+        osc.stop(startTime + duration + 0.05);
+      }
+
+      function playMelodyOnce(startAt) {
+        if (!audioCtx) return 0;
+        let t = startAt;
+        melody.forEach(function(step) {
+          const dur = step.beats * beatDuration;
+          if (step.note !== 'REST') {
+            const f = noteFreq[step.note];
+            if (f) {
+              // main melody voice
+              playNote(f, t, dur * 0.92, 'triangle');
+              // soft harmony an octave below for warmth
+              playNote(f / 2, t, dur * 0.92, 'sine');
+            }
+          }
+          t += dur;
+        });
+        return t - startAt; // total duration
+      }
+
+      function scheduleLoop() {
+        if (!musicPlaying || !audioCtx) return;
+        const now = audioCtx.currentTime + 0.08;
+        const totalDur = playMelodyOnce(now);
+        // schedule next loop a little after current finishes
+        const loopGap = 0.5; // seconds of silence between loops
+        musicLoopTimer = setTimeout(function() {
+          if (musicPlaying) scheduleLoop();
+        }, (totalDur + loopGap) * 1000);
+      }
+
+      function startMusic() {
+        if (musicPlaying) return;
+        if (!initAudio()) return;
+        musicPlaying = true;
+        scheduleLoop();
+        updateMusicUI(true);
+      }
+
+      function stopMusic() {
+        musicPlaying = false;
+        if (musicLoopTimer) {
+          clearTimeout(musicLoopTimer);
+          musicLoopTimer = null;
+        }
+        // stop any scheduled oscillators by disconnecting gain
+        if (masterGain) {
+          try {
+            masterGain.gain.cancelScheduledValues(audioCtx.currentTime);
+            masterGain.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+          } catch (e) {}
+        }
+        // recreate gain node so future plays work
+        setTimeout(function() {
+          if (audioCtx && masterGain) {
+            try {
+              masterGain.disconnect();
+            } catch (e) {}
+            masterGain = audioCtx.createGain();
+            masterGain.gain.value = 0.18;
+            masterGain.connect(audioCtx.destination);
+          }
+        }, 100);
+        updateMusicUI(false);
+      }
+
+      /* Music toggle UI */
+      const musicToggle = document.getElementById('musicToggle');
+      const musicIcon = document.getElementById('musicIcon');
+
+      function updateMusicUI(isPlaying) {
+        if (isPlaying) {
+          musicToggle.classList.remove('muted');
+          musicIcon.className = 'fas fa-music';
+        } else {
+          musicToggle.classList.add('muted');
+          musicIcon.className = 'fas fa-volume-xmark';
+        }
+      }
+
+      musicToggle.addEventListener('click', function(e) {
+        e.preventDefault();
+        if (musicPlaying) {
+          stopMusic();
+        } else {
+          startMusic();
+        }
+      });
+
+      /* ==========================================================
          1. CONTINUOUS CONFETTI
       ========================================================== */
       const confettiLayer = document.getElementById('confettiLayer');
@@ -912,6 +1146,11 @@
         if (hasCut) return;
         hasCut = true;
 
+        // Try to start music on first interaction (user gesture required)
+        if (!musicPlaying) {
+          startMusic();
+        }
+
         const rect = cake.getBoundingClientRect();
         const cx = rect.left + rect.width / 2;
         const cy = rect.top + rect.height / 2;
@@ -972,17 +1211,43 @@
         const rect = celebrateBtn.getBoundingClientRect();
         confettiBurst(rect.left + rect.width / 2, rect.top + rect.height / 2, 45);
         setTimeout(function() {
-          alert('🎂 Happy Birthday Nahid! 🎉\n\n— With love from Rakibul It💛');
+          alert('🎂 Happy Birthday Nahid! 🎉\n\n— With love from Rakibul 💛');
         }, 120);
         celebrateBtn.style.transform = 'scale(0.92)';
         setTimeout(function() { celebrateBtn.style.transform = ''; }, 150);
       });
 
       /* ==========================================================
-         4. INITIAL SPARKLE
+         4. INITIAL SPARKLE + MUSIC PROMPT
       ========================================================== */
       window.addEventListener('load', function() {
         confettiBurst(window.innerWidth / 2, window.innerHeight * 0.35, 20);
+        // Autoplay is usually blocked on load, but we try anyway.
+        // If blocked, music starts on the first tap of the cake.
+        try {
+          if (initAudio()) {
+            // Don't auto-start to respect user gesture rules; will start on cake tap.
+          }
+        } catch (e) {}
+      });
+
+      // Also start music on any first tap anywhere (in case they don't tap the cake right away)
+      let firstGestureDone = false;
+      document.addEventListener('pointerdown', function startOnGesture() {
+        if (firstGestureDone) return;
+        firstGestureDone = true;
+        if (!musicPlaying) {
+          try { startMusic(); } catch (e) {}
+        }
+      }, { once: true });
+
+      /* ==========================================================
+         5. GESTURE-BASED FALLBACK: resume audio context on visibility
+      ========================================================== */
+      document.addEventListener('visibilitychange', function() {
+        if (document.visibilityState === 'visible' && musicPlaying && audioCtx && audioCtx.state === 'suspended') {
+          audioCtx.resume();
+        }
       });
 
     })();
